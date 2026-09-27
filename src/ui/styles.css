@@ -10,9 +10,20 @@
   --panel-2: #f7efdd;
   --ink: #2a2118;
   --ink-2: #5b4d3d;
-  --muted: #8a7a66;
+  /* 卓の色（--bg）の上の小さい字でも WCAG AA（4.5:1）を割らない濃さ。以前の #8a7a66 は 3.3:1 だった */
+  --muted: #6f604d;
   --line: #d9c9a8;
-  --shadow: 0 1px 0 #fff inset, 0 6px 0 -2px #d4c29e, 0 12px 24px -12px rgb(60 40 10 / 35%);
+
+  /*
+   * 厚みは2段だけ。部品ごとに 3/4/6/8px とばらばらだと、どれが上に乗っているのか分からなくなる。
+   * 板（カード・盤面・進行パネル）は --lift-2、手で触る部品（ボタン・選択肢・プレイヤー札）は --lift-1
+   */
+  --lift-1: 0 3px 0 var(--ink);
+  --lift-2: 0 6px 0 var(--ink);
+
+  /* 角丸も2段に固定する（板 / 手で触る部品）。札と色見本は丸（99px）か 4px で、これは形で役割を分けている */
+  --r-panel: 20px;
+  --r-ctrl: 14px;
 
   --red: #e2553f;
   --red-deep: #b73a27;
@@ -33,7 +44,6 @@
   --tile-plain: #eee6d3;
 
   --font: 'BIZ UDPGothic', 'Hiragino Maru Gothic ProN', 'Hiragino Sans', 'Yu Gothic UI', Meiryo, system-ui, sans-serif;
-  --radius: 18px;
   color-scheme: light;
 }
 
@@ -55,6 +65,23 @@ body {
   background-size: 18px 18px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  /* 日本語を文節で折り返す（対応していないブラウザは今まで通り文字単位） */
+  word-break: auto-phrase;
+}
+
+/* 見出しと太字の部品は、かなを詰めて組む（palt）。等幅のままだと大きい字ほど間延びして見える */
+h1,
+h2,
+h3,
+h4,
+.brand,
+.btn,
+.tab,
+.opt-label,
+.stage-who,
+.pcard-name,
+.rank-name {
+  font-feature-settings: 'palt';
 }
 
 button,
@@ -80,7 +107,7 @@ input {
   margin: 0;
   font-size: clamp(40px, 7vw, 68px);
   font-weight: 900;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
   line-height: 1.05;
   color: var(--ink);
 }
@@ -105,19 +132,20 @@ input {
 .card {
   background: var(--panel);
   border: 2px solid var(--ink);
-  border-radius: 24px;
-  box-shadow: 0 8px 0 var(--ink);
+  border-radius: var(--r-panel);
+  box-shadow: var(--lift-2);
 }
 
 .btn {
   appearance: none;
   border: 2px solid var(--ink);
-  border-radius: 14px;
+  border-radius: var(--r-ctrl);
   padding: 10px 18px;
   font-weight: 800;
   cursor: pointer;
   background: var(--panel);
-  box-shadow: 0 4px 0 var(--ink);
+  box-shadow: var(--lift-1);
+  white-space: nowrap;
   transition:
     transform 0.08s,
     box-shadow 0.08s,
@@ -126,12 +154,13 @@ input {
 
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 5px 0 var(--ink);
+  box-shadow: 0 4px 0 var(--ink);
 }
 
+/* 押すと影の分だけ沈む。影の厚み（3px）と沈む量を揃えないと、押した瞬間に部品が浮いて見える */
 .btn:active:not(:disabled) {
   transform: translateY(3px);
-  box-shadow: 0 1px 0 var(--ink);
+  box-shadow: 0 0 0 var(--ink);
 }
 
 .btn:disabled {
@@ -175,7 +204,6 @@ input {
   width: 100%;
   padding: 15px 20px;
   font-size: 19px;
-  border-radius: 16px;
 }
 
 .btn-sm {
@@ -193,6 +221,7 @@ input {
   border: 1.5px solid var(--line);
   color: var(--ink-2);
   white-space: nowrap;
+  flex: none;
 }
 
 .tag-me {
@@ -209,7 +238,7 @@ input {
 
 .tag-away {
   background: #eee;
-  color: #777;
+  color: #5f5f5f;
 }
 
 .chip {
@@ -239,10 +268,14 @@ input {
 input {
   width: 100%;
   border: 2px solid var(--ink);
-  border-radius: 12px;
+  border-radius: var(--r-ctrl);
   padding: 12px 14px;
   font-size: 18px;
   background: #fff;
+}
+
+input::placeholder {
+  color: var(--muted);
 }
 
 input:focus {
@@ -257,7 +290,7 @@ input:focus {
 }
 
 .splash {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-content: center;
   gap: 8px;
@@ -291,12 +324,14 @@ input:focus {
   transform: translateX(-50%);
   z-index: 60;
   border: 2px solid var(--ink);
-  border-radius: 14px;
+  border-radius: var(--r-ctrl);
   background: #fff;
-  box-shadow: 0 6px 0 var(--ink);
+  box-shadow: var(--lift-2);
   padding: 12px 18px;
   font-weight: 700;
   cursor: pointer;
+  /* left: 50% のままだと幅の上限が画面の半分になり、短い文でも2行に折れる。文の長さで幅を決める */
+  width: max-content;
   max-width: calc(100vw - 32px);
   animation: pop 0.2s ease-out;
 }
@@ -309,7 +344,7 @@ input:focus {
 
 /* ------------------------------------------------------------ 入口 */
 .top {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -337,8 +372,8 @@ input:focus {
   font-size: 26px;
   background: var(--panel);
   border: 2px solid var(--ink);
-  border-radius: 14px;
-  box-shadow: 0 4px 0 var(--ink);
+  border-radius: var(--r-ctrl);
+  box-shadow: var(--lift-1);
   animation: hop 2.4s ease-in-out infinite;
 }
 
@@ -422,7 +457,7 @@ input:focus {
 
 /* ------------------------------------------------------------ ロビー */
 .lobby {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -442,7 +477,7 @@ input:focus {
   gap: 12px;
   padding: 16px;
   background: var(--panel-2);
-  border-radius: 16px;
+  border-radius: var(--r-ctrl);
   border: 2px dashed var(--line);
 }
 
@@ -486,7 +521,7 @@ input:focus {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 8px;
 }
 
@@ -497,7 +532,7 @@ input:focus {
   padding: 8px 10px;
   background: #fff;
   border: 2px solid var(--pc);
-  border-radius: 14px;
+  border-radius: var(--r-ctrl);
   min-width: 0;
 }
 
@@ -518,13 +553,28 @@ input:focus {
   box-shadow: 0 0 0 2px var(--pc);
 }
 
+/*
+ * 名前と札（ホスト・あなた・手番）は2段に組む。1行に並べると、札2枚で名前が3文字しか残らないか、
+ * 札が隣の席にはみ出していた。名前は10文字まで入る。ロビーの席とプレイヤー札で共通
+ */
+.seat-who {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.3;
+}
+
+.seat-tags {
+  display: flex;
+  gap: 4px;
+}
+
 .seat-name {
-  min-width: 3em;
+  min-width: 0;
   font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
 }
 
 .seat-empty {
@@ -543,21 +593,32 @@ input:focus {
 
 .segmented button {
   border: 2px solid var(--ink);
-  border-radius: 14px;
+  border-radius: var(--r-ctrl);
   background: #fff;
   padding: 10px 6px;
   cursor: pointer;
-  display: grid;
-  justify-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  column-gap: 2px;
   line-height: 1.2;
   font-weight: 700;
+  transition: background 0.15s;
+}
+
+.segmented button:hover:not(:disabled):not(.on) {
+  background: var(--panel-2);
 }
 
 .segmented button b {
   font-size: 24px;
 }
 
+/* 説明だけ下の段に回す。「50」と「マス」を別の段にすると、単位が数字から離れて読みにくい */
 .segmented button small {
+  flex-basis: 100%;
+  text-align: center;
   color: var(--muted);
   font-size: 12px;
 }
@@ -578,7 +639,7 @@ input:focus {
 
 /* ------------------------------------------------------------ ゲーム画面 */
 .game {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -641,11 +702,11 @@ input:focus {
   background: var(--panel);
   border: 2px solid var(--ink);
   border-left: 8px solid var(--pc);
-  border-radius: 16px;
+  border-radius: var(--r-ctrl);
   padding: 10px 12px;
   display: grid;
   gap: 6px;
-  box-shadow: 0 3px 0 var(--ink);
+  box-shadow: var(--lift-1);
   transition:
     box-shadow 0.2s,
     transform 0.2s;
@@ -653,7 +714,7 @@ input:focus {
 
 .pcard-active {
   box-shadow:
-    0 3px 0 var(--ink),
+    var(--lift-1),
     0 0 0 4px color-mix(in srgb, var(--pc) 35%, transparent);
   transform: translateX(4px);
 }
@@ -795,7 +856,7 @@ input:focus {
 
 .tab {
   border: 2px solid var(--ink);
-  border-radius: 12px 12px 4px 4px;
+  border-radius: var(--r-ctrl) var(--r-ctrl) 4px 4px;
   background: var(--panel-2);
   padding: 6px 12px;
   font-weight: 800;
@@ -826,10 +887,10 @@ input:focus {
 .board-wrap {
   background: #f8f0dc;
   border: 2px solid var(--ink);
-  border-radius: 24px;
+  border-radius: var(--r-panel);
   padding: 10px;
   box-shadow:
-    0 8px 0 var(--ink),
+    var(--lift-2),
     inset 0 0 0 6px #fbf5e6;
 }
 
@@ -984,6 +1045,7 @@ input:focus {
   height: 14px;
   border-radius: 4px;
   border: 1.5px solid var(--ink);
+  flex: none;
 }
 
 .sw-up {
@@ -1012,8 +1074,8 @@ input:focus {
 .stage {
   background: var(--panel);
   border: 2px solid var(--ink);
-  border-radius: 22px;
-  box-shadow: 0 6px 0 var(--ink);
+  border-radius: var(--r-panel);
+  box-shadow: var(--lift-2);
   overflow: hidden;
   flex: none;
 }
@@ -1096,7 +1158,7 @@ input:focus {
   border-radius: 20%;
   box-shadow:
     inset -4px -5px 0 #eadfca,
-    0 5px 0 var(--ink);
+    var(--lift-1);
 }
 
 .die-lg {
@@ -1111,7 +1173,7 @@ input:focus {
   padding: 6px;
   box-shadow:
     inset -3px -3px 0 #eadfca,
-    0 3px 0 var(--ink);
+    0 2px 0 var(--ink);
 }
 
 .die-blank {
@@ -1177,6 +1239,12 @@ input:focus {
   from {
     transform: translateY(8px);
   }
+}
+
+.notice-title,
+.choice-title,
+.results-hero h1 {
+  text-wrap: balance;
 }
 
 .notice-title {
@@ -1268,13 +1336,13 @@ input:focus {
   appearance: none;
   text-align: left;
   border: 2px solid var(--ink);
-  border-radius: 14px;
+  border-radius: var(--r-ctrl);
   padding: 10px 14px;
   background: #fff;
   cursor: pointer;
   display: grid;
   gap: 1px;
-  box-shadow: 0 3px 0 var(--ink);
+  box-shadow: var(--lift-1);
   transition:
     transform 0.08s,
     box-shadow 0.08s,
@@ -1286,8 +1354,8 @@ input:focus {
 }
 
 .opt:active:not(:disabled) {
-  transform: translateY(2px);
-  box-shadow: 0 1px 0 var(--ink);
+  transform: translateY(3px);
+  box-shadow: 0 0 0 var(--ink);
 }
 
 .opt:disabled {
@@ -1324,7 +1392,8 @@ input:focus {
 .log {
   background: var(--panel);
   border: 2px solid var(--ink);
-  border-radius: 18px;
+  border-radius: var(--r-panel);
+  box-shadow: var(--lift-1);
   padding: 12px 14px;
   min-height: 0;
   display: flex;
@@ -1376,7 +1445,7 @@ input:focus {
 
 /* ------------------------------------------------------------ 結果 */
 .results {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -1422,9 +1491,9 @@ input:focus {
   background: var(--panel);
   border: 2px solid var(--ink);
   border-left: 10px solid var(--pc);
-  border-radius: 18px;
+  border-radius: var(--r-panel);
   padding: 14px 18px;
-  box-shadow: 0 4px 0 var(--ink);
+  box-shadow: var(--lift-1);
   animation: rise 0.4s ease-out both;
 }
 
@@ -1440,7 +1509,7 @@ input:focus {
 
 .rank-1 {
   background: linear-gradient(100deg, #fff4cf, var(--panel) 55%);
-  box-shadow: 0 6px 0 var(--ink);
+  box-shadow: var(--lift-2);
 }
 
 .rank-place {
@@ -1552,16 +1621,17 @@ input:focus {
 }
 
 /* 止まったマス */
+/* 太さではなく濃さで脈打たせる。stroke-width を動かすと毎フレーム形の計算からやり直しになる */
 .landed {
   fill: none;
   stroke: var(--gold);
-  stroke-width: 5;
-  animation: glow 1s ease-in-out infinite alternate;
+  stroke-width: 6;
+  animation: glow 0.9s ease-in-out infinite alternate;
 }
 
 @keyframes glow {
-  to {
-    stroke-width: 8;
+  from {
+    opacity: 0.45;
   }
 }
 
@@ -1572,7 +1642,82 @@ input:focus {
   .topbar {
     gap: 10px;
   }
+  /* URL とコピーボタンを横に並べると、URL の欄が「http://loca」まで潰れて何の欄か分からなくなる */
+  .invite-url {
+    flex-direction: column;
+  }
+  /* 52px のマス6枚だと 362px になり、スマホ（本文 343px）からはみ出してフォームまで押し広げていた */
+  .hero-tiles {
+    gap: 8px;
+  }
+  .hero-tiles span {
+    width: 42px;
+    height: 42px;
+    font-size: 21px;
+  }
+  /* 狭い画面では部屋コードだけにする。コース長まで入れると2行に折れて、バーが盤面を押し下げる */
+  .topbar-course {
+    display: none;
+  }
   .board {
+    max-height: none;
+  }
+
+  /*
+   * 進行パネルを画面の下に貼り付ける。1列に積むと、盤面（縦に長い）を毎手番スクロールで
+   * 越えないとサイコロが振れなかった。パネルとログを別々に並べ替えたいので、列の箱は外す
+   */
+  .col-stage {
+    display: contents;
+  }
+  .col-board {
+    order: 1;
+  }
+  .stage {
+    order: 2;
+    position: sticky;
+    bottom: 8px;
+    z-index: 5;
+    max-height: 55dvh;
+    overflow-y: auto;
+  }
+  .log {
+    order: 3;
+  }
+  .col-roster {
+    order: 4;
+  }
+  .stage-head {
+    padding: 8px 14px;
+  }
+  .stage-dot {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+  .stage-who {
+    font-size: 16px;
+  }
+  /* サイコロとボタンを横に並べて、貼り付けたパネルが盤面を隠す高さを抑える */
+  .stage-body.stage-roll {
+    grid-template-columns: auto 1fr;
+    justify-items: stretch;
+    align-items: center;
+    text-align: left;
+    gap: 6px 14px;
+    padding: 14px;
+  }
+  .stage-roll .die-lg {
+    grid-row: span 2;
+    width: 64px;
+    height: 64px;
+    padding: 8px;
+  }
+  .stage-roll .btn-roll {
+    font-size: 18px;
+    padding: 12px;
+  }
+  .choice-options {
     max-height: none;
   }
 }

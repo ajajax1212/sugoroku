@@ -22,7 +22,7 @@ export function Results({ room, game, lobby, me }: { room: Room; game: GameView;
         <h1>
           {winner ? (
             <>
-              <span style={{ color: playerColor(winner.color) }}>{winner.name}</span> の人生が
+              <span style={{ color: playerColor(winner.color) }}>{winner.name}</span>の人生が
               <br />
               いちばんリッチでした！
             </>
@@ -81,7 +81,7 @@ export function Results({ room, game, lobby, me }: { room: Room; game: GameView;
             もう一度あそぶ
           </button>
         ) : (
-          <p className="waiting">ホストが次のゲームを用意するのを待っています…</p>
+          <p className="waiting center">ホストが次のゲームを用意するのを待っています…</p>
         )}
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => void room.leave()}>
           部屋を出る

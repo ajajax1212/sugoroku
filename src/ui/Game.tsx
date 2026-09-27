@@ -64,7 +64,8 @@ export function Game({ room, game, lobby, me }: { room: Room; game: GameView; lo
           じんせい<span>すごろく</span>
         </div>
         <div className="topbar-mid">
-          部屋 <b className="num">{lobby.code}</b>・社会人コース {game.courseLength}マス
+          部屋 <b className="num">{lobby.code}</b>
+          <span className="topbar-course">・社会人コース {game.courseLength}マス</span>
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => confirm('部屋を抜けますか？ あなたのコマは自動で進みます。') && void room.leave()}>
           抜ける

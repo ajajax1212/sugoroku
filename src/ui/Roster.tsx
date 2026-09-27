@@ -22,10 +22,16 @@ export function Roster({ players, turnId, me }: { players: Player[]; turnId: str
           <li key={p.id} className={`pcard${active ? ' pcard-active' : ''}${p.connected ? '' : ' pcard-away'}`} style={{ '--pc': color } as React.CSSProperties}>
             <div className="pcard-head">
               <span className="pcard-dot">{[...p.name][0]}</span>
-              <span className="pcard-name">{p.name}</span>
-              {p.id === me && <span className="tag tag-me">あなた</span>}
-              {active && <span className="tag tag-turn">手番</span>}
-              {!p.connected && <span className="tag tag-away">不在</span>}
+              <span className="seat-who">
+                <span className="pcard-name">{p.name}</span>
+                {(p.id === me || active || !p.connected) && (
+                  <span className="seat-tags">
+                    {p.id === me && <span className="tag tag-me">あなた</span>}
+                    {active && <span className="tag tag-turn">手番</span>}
+                    {!p.connected && <span className="tag tag-away">不在</span>}
+                  </span>
+                )}
+              </span>
             </div>
             <div className="pcard-money">
               <span className="pcard-rank">{ranks.get(p.id)}位</span>

@@ -49,9 +49,15 @@ export function Lobby({ room, lobby, me }: { room: Room; lobby: LobbyState; me: 
             {lobby.players.map((p, i) => (
               <li key={p.id} className="seat" style={{ '--pc': playerColor(i) } as React.CSSProperties}>
                 <span className="seat-dot">{[...p.name][0]}</span>
-                <span className="seat-name">{p.name}</span>
-                {p.id === lobby.hostId && <span className="tag">ホスト</span>}
-                {p.id === me && <span className="tag tag-me">あなた</span>}
+                <span className="seat-who">
+                  <span className="seat-name">{p.name}</span>
+                  {(p.id === lobby.hostId || p.id === me) && (
+                    <span className="seat-tags">
+                      {p.id === lobby.hostId && <span className="tag">ホスト</span>}
+                      {p.id === me && <span className="tag tag-me">あなた</span>}
+                    </span>
+                  )}
+                </span>
               </li>
             ))}
             {Array.from({ length: Math.max(0, MIN_PLAYERS - lobby.players.length) }, (_, i) => (
