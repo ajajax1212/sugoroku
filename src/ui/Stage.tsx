@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { DICE_MS } from '../engine/game';
 import type { GameView } from '../engine/view';
+import { REACTIONS } from '../net/events';
 import type { Room } from '../net/useRoom';
 import { Die } from './Dice';
 import { playerColor } from './theme';
@@ -90,28 +91,17 @@ export function Stage({ game, me, room, now }: { game: GameView; me: string | nu
       )}
 
       {step.k === 'notice' && (
-        <div
-          className={`notice notice-${step.notice.tone}${mine ? ' notice-clickable' : ''}`}
+        <NoticeCard
           key={game.seq}
-          onClick={mine ? () => void room.skipNotice() : undefined}
-          role={mine ? 'button' : undefined}
-        >
-          <h3 className="notice-title">{step.notice.title}</h3>
-          {step.notice.dice && (
-            <div className="notice-dice">
-              {step.notice.dice.map((d, i) => (
-                <Die key={i} value={d} size="sm" />
-              ))}
-            </div>
-          )}
-          {step.notice.lines.map((l, i) => (
-            <p key={i} className="notice-line">
-              {l}
-            </p>
-          ))}
-          <Countdown endsAt={step.endsAt} now={now} seq={game.seq} />
-          <p className="notice-foot">{mine ? 'クリックか Enter で次へ' : '自動で進みます'}</p>
-        </div>
+          notice={step.notice}
+          hidden={step.revealAt !== undefined && now < step.revealAt}
+          revealed={step.revealAt !== undefined}
+          endsAt={step.endsAt}
+          now={now}
+          seq={game.seq}
+          mine={mine}
+          onSkip={() => void room.skipNotice()}
+        />
       )}
 
       {step.k === 'choice' && game.choiceView && (
@@ -141,7 +131,80 @@ export function Stage({ game, me, room, now }: { game: GameView; me: string | nu
           </p>
         </div>
       )}
+
+      {!mine && me && game.step.k !== 'finished' && <ReactionBar onReact={room.react} />}
     </section>
+  );
+}
+
+/**
+ * お知らせ。賭けの結果は revealAt まで伏せて、見出しを suspense に差し替え、サイコロを転がして見せる。
+ * 伏せている時刻はサーバーが決めているので、全員の画面で同時に開く
+ */
+function NoticeCard({
+  notice,
+  hidden,
+  revealed,
+  endsAt,
+  now,
+  seq,
+  mine,
+  onSkip,
+}: {
+  notice: NonNullable<Extract<GameView['step'], { k: 'notice' }>['notice']>;
+  hidden: boolean;
+  revealed: boolean;
+  endsAt: number;
+  now: number;
+  seq: number;
+  mine: boolean;
+  onSkip: () => void;
+}) {
+  const clickable = mine && !hidden;
+  return (
+    <div
+      className={`notice notice-${hidden ? 'event' : notice.tone}${clickable ? ' notice-clickable' : ''}${hidden ? ' notice-hidden' : revealed ? ' notice-reveal' : ''}`}
+      onClick={clickable ? onSkip : undefined}
+      role={clickable ? 'button' : undefined}
+    >
+      <h3 className="notice-title">{hidden ? notice.suspense : notice.title}</h3>
+      {notice.dice && (
+        <div className="notice-dice">
+          {notice.dice.map((d, i) => (
+            // 複数のサイコロが同じ目で揃って回ると作り物に見えるので、少しずつ時刻をずらす
+            <Die key={i} value={d} size="sm" rolling={hidden} now={now + i * 53} />
+          ))}
+        </div>
+      )}
+      {hidden ? (
+        !notice.dice && <p className="notice-drum" aria-label="結果を待っています">
+          <span>●</span>
+          <span>●</span>
+          <span>●</span>
+        </p>
+      ) : (
+        notice.lines.map((l, i) => (
+          <p key={i} className="notice-line">
+            {l}
+          </p>
+        ))
+      )}
+      {!hidden && <Countdown endsAt={endsAt} now={now} seq={seq} />}
+      <p className="notice-foot">{hidden ? 'みんなの画面で同時に開きます…' : mine ? 'クリックか Enter で次へ' : '自動で進みます'}</p>
+    </div>
+  );
+}
+
+/** 手番でない人が押すリアクション。手番の人の画面にも、全員の画面にも流れる */
+function ReactionBar({ onReact }: { onReact: (e: (typeof REACTIONS)[number]) => void }) {
+  return (
+    <div className="reactbar" aria-label="リアクション">
+      {REACTIONS.map((e) => (
+        <button type="button" key={e} className="reactbar-btn" onClick={() => onReact(e)}>
+          {e}
+        </button>
+      ))}
+    </div>
   );
 }
 

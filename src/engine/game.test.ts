@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Action, type GameState, type Rng, AWAY_MS, choiceOptions, current, reducer, stepDeadline } from './game';
+import { type Action, type Choice, type GameState, type Rng, AWAY_MS, REVEAL_MS, RIVAL_BASE, choiceOptions, current, reducer, stepDeadline } from './game';
 
 /** 種から決まる乱数（mulberry32）。同じ種なら同じゲームになる */
 function seeded(seed: number): Rng {
@@ -58,7 +58,7 @@ describe('進行が止まらない', () => {
           const opts = choiceOptions(s, s.step.choice).filter((o) => !o.disabled);
           expect(opts.length).toBeGreaterThan(0);
           action = { type: 'CHOOSE', playerId: me, optionId: opts[Math.floor(rng() * opts.length)]!.id, now: 0 };
-        } else if (s.step.k === 'notice') action = { type: 'SKIP_NOTICE', playerId: me, now: 0 };
+        } else if (s.step.k === 'notice') action = { type: 'SKIP_NOTICE', playerId: me, now: s.step.revealAt ?? 0 };
         else action = { type: 'TIMEOUT', now: stepDeadline(s)! };
         const next = reducer(s, action, rng);
         expect(next, `seed ${seed} step ${s.step.k}`).not.toBe(s);
@@ -146,5 +146,106 @@ describe('選択肢', () => {
         s = reducer(s, { type: 'TIMEOUT', now: stepDeadline(s)! }, rng);
       }
     }
+  });
+});
+
+describe('2026-09 に足したルール', () => {
+  /** 決まった値を返し続ける乱数。サイコロの目を決め打ちするのに使う（0 → 1の目、0.99 → 6の目） */
+  const fixed = (v: number): Rng => () => v;
+  /** 手番の人（p0）に選択を出した状態を作る */
+  function withChoice(choice: Choice, patch: (s: GameState) => void = () => {}): GameState {
+    const s = start(3, seeded(1));
+    patch(s);
+    s.step = { k: 'choice', choice, deadline: 1_000_000 };
+    return s;
+  }
+  const total = (s: GameState) => s.players.reduce((a, p) => a + p.money, 0);
+
+  it('賭けの結果は伏せている間は飛ばせず、開いたあとは飛ばせる', () => {
+    const s = reducer(withChoice({ k: 'exam', required: 4, hakushiki: false, retry: false }), { type: 'CHOOSE', playerId: 'p0', optionId: 'roll', now: 0 }, fixed(0.99));
+    expect(s.step.k).toBe('notice');
+    if (s.step.k !== 'notice') return;
+    expect(s.step.revealAt).toBe(REVEAL_MS);
+    expect(reducer(s, { type: 'SKIP_NOTICE', playerId: 'p0', now: REVEAL_MS - 1 }, fixed(0))).toBe(s);
+    expect(reducer(s, { type: 'SKIP_NOTICE', playerId: 'p0', now: REVEAL_MS }, fixed(0))).not.toBe(s);
+  });
+
+  it('大学に落ちたら、専門学校・浪人・フリーターから選べる。浪人は1回まで', () => {
+    let s = reducer(withChoice({ k: 'exam', required: 6, hakushiki: false, retry: false }), { type: 'CHOOSE', playerId: 'p0', optionId: 'roll', now: 0 }, fixed(0));
+    s = reducer(s, { type: 'TIMEOUT', now: stepDeadline(s)! }, fixed(0));
+    expect(s.step.k === 'choice' && s.step.choice.k).toBe('examFailed');
+    if (s.step.k !== 'choice') return;
+    expect(choiceOptions(s, s.step.choice).map((o) => o.id)).toEqual(['professional', 'ronin', 'freeter']);
+
+    s = reducer(s, { type: 'CHOOSE', playerId: 'p0', optionId: 'ronin', now: 0 }, fixed(0));
+    expect(s.players[0]!.missTurns).toBe(1);
+    expect(s.step.k === 'choice' && s.step.choice.k === 'exam' && s.step.choice.retry).toBe(true);
+
+    s = reducer(s, { type: 'CHOOSE', playerId: 'p0', optionId: 'roll', now: 0 }, fixed(0));
+    s = reducer(s, { type: 'TIMEOUT', now: stepDeadline(s)! }, fixed(0));
+    if (s.step.k !== 'choice') throw new Error('選び直しが出ていない');
+    expect(choiceOptions(s, s.step.choice).map((o) => o.id)).toEqual(['professional', 'freeter']);
+  });
+
+  it('時間切れで落ちたときは、旧版と同じくフリーターになる', () => {
+    const s = withChoice({ k: 'examFailed', canRetry: true });
+    const next = reducer(s, { type: 'TIMEOUT', now: 1_000_000 }, fixed(0));
+    expect(next.players[0]!.job).toBe('FREETER');
+    expect(next.players[0]!.board).toBe('MAIN');
+  });
+
+  it('超BADは自分より所持金の多い人にだけ押し付けられ、被害はその人に行く', () => {
+    const s = withChoice({ k: 'superBad', targets: ['p1'] }, (x) => {
+      x.players[0]!.money = 100;
+      x.players[1]!.money = 10_000_000;
+    });
+    expect(choiceOptions(s, s.step.k === 'choice' ? s.step.choice : ({} as Choice)).map((o) => o.id)).toEqual(['p1', 'self']);
+    // fixed(0) で「投資詐欺（所持金の2割を失う）」が出る
+    const next = reducer(s, { type: 'CHOOSE', playerId: 'p0', optionId: 'p1', now: 0 }, fixed(0));
+    expect(next.players[0]!.money).toBe(100);
+    expect(next.players[1]!.money).toBe(8_000_000);
+    // 選択肢に無い人（p2）は選べない
+    expect(reducer(s, { type: 'CHOOSE', playerId: 'p0', optionId: 'p2', now: 0 }, fixed(0))).toBe(s);
+  });
+
+  it('勝負は出目の大きい方が賭け金を奪い、お金の合計は変わらない', () => {
+    const s = withChoice({ k: 'rival', targets: ['p1', 'p2'], stake: RIVAL_BASE });
+    // 自分 6・相手 6 → 引き分け
+    const draw = reducer(s, { type: 'CHOOSE', playerId: 'p0', optionId: 'p1', now: 0 }, fixed(0.99));
+    expect(draw.players[0]!.money).toBe(s.players[0]!.money);
+    // 自分 1・相手 6
+    let n = 0;
+    const lose = reducer(s, { type: 'CHOOSE', playerId: 'p0', optionId: 'p1', now: 0 }, () => (n++ === 0 ? 0 : 0.99));
+    expect(lose.players[0]!.money).toBe(s.players[0]!.money - RIVAL_BASE);
+    expect(lose.players[1]!.money).toBe(s.players[1]!.money + RIVAL_BASE);
+    expect(total(lose)).toBe(total(s));
+  });
+
+  it('休みの手番には、社会人なら給料1回分の生活費がかかる', () => {
+    const rng = seeded(5);
+    const s = start(2, rng);
+    Object.assign(s.players[1]!, { board: 'MAIN', salary: 250_000, missTurns: 1 });
+    s.step = { k: 'notice', notice: { title: '', lines: [], tone: 'info', then: { k: 'nextPlayer' } }, endsAt: 0 };
+    const next = reducer(s, { type: 'TIMEOUT', now: 0 }, rng);
+    expect(next.players[1]!.money).toBe(s.players[1]!.money - 250_000);
+    expect(current(next).id).toBe('p0');
+  });
+
+  it('転職マスでは今の仕事を選び直せない（選ぶと昇給が消えていた）', () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const rng = seeded(seed);
+      let s = start(3, rng, 50);
+      let guard = 0;
+      while (s.step.k !== 'finished' && guard++ < 20_000) {
+        if (s.step.k === 'choice' && s.step.choice.k === 'job' && !s.step.choice.first && current(s).job !== 'NONE') {
+          const ids = choiceOptions(s, s.step.choice).map((o) => o.id);
+          expect(ids).not.toContain(current(s).job);
+          expect(ids).toContain('keep');
+          return;
+        }
+        s = reducer(s, { type: 'TIMEOUT', now: stepDeadline(s)! }, rng);
+      }
+    }
+    throw new Error('転職マスに一度も止まらなかった');
   });
 });

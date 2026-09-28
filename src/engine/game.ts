@@ -54,6 +54,13 @@ export const ROLL_MS = 40_000;
 /** 手番の人の接続が切れているときは、この時間で代わりに進める */
 export const AWAY_MS = 3_000;
 
+/**
+ * 賭けの結果（入試・宝くじ・起業・勝負など）を伏せておく時間。
+ * 押した瞬間に結果が出ると、1ゲームで一番緊張するはずの場面が一番あっさり終わる。
+ * 全員の画面で同時に転がして同時に開けたいので、画面ではなくサーバーの時刻で持つ
+ */
+export const REVEAL_MS = 1_800;
+
 /** お知らせを出しておく時間。文の長さで決める（読み終わる前に消えないように） */
 export function noticeMs(n: Notice): number {
   const chars = n.title.length + n.lines.reduce((a, l) => a + l.length, 0);
@@ -108,14 +115,21 @@ export type Notice = {
   title: string;
   lines: string[];
   tone: Tone;
-  /** 出目を見せたいとき（入試・宝くじ） */
+  /** 出目を見せたいとき（入試・宝くじ・勝負） */
   dice?: number[];
+  /** これがあると、結果を REVEAL_MS のあいだ伏せて、代わりにこの見出しを出す（溜め） */
+  suspense?: string;
   then: Then;
 };
 
 export type Choice =
   | { k: 'hsGraduation' }
-  | { k: 'exam'; required: number; hakushiki: boolean }
+  /** retry は浪人してからの受け直し。浪人は1回まで */
+  | { k: 'exam'; required: number; hakushiki: boolean; retry: boolean }
+  | { k: 'examFailed'; canRetry: boolean }
+  /** 超BAD。targets は自分より所持金の多い人（押し付けられる相手） */
+  | { k: 'superBad'; targets: string[] }
+  | { k: 'rival'; targets: string[]; stake: number }
   | { k: 'job'; first: boolean; reconsider: boolean; jobs: JobId[]; tip: boolean }
   | { k: 'shopping'; items: ItemId[] }
   | { k: 'lottery' }
@@ -129,7 +143,7 @@ export type Choice =
 export type Step =
   | { k: 'roll'; deadline: number }
   | { k: 'move'; dice: number; board: BoardKey; from: number; to: number; startedAt: number; endsAt: number }
-  | { k: 'notice'; notice: Notice; endsAt: number }
+  | { k: 'notice'; notice: Notice; endsAt: number; revealAt?: number }
   | { k: 'choice'; choice: Choice; deadline: number }
   | { k: 'finished' };
 
@@ -182,7 +196,10 @@ function setStep(s: GameState, step: Step): void {
 }
 
 function notice(s: GameState, now: number, n: Notice): void {
-  setStep(s, { k: 'notice', notice: n, endsAt: now + noticeMs(n) });
+  if (!n.suspense) return setStep(s, { k: 'notice', notice: n, endsAt: now + noticeMs(n) });
+  // 伏せている時間は読む時間に数えない（開いてから読み終わるまでの時間は今まで通り取る）
+  const revealAt = now + REVEAL_MS;
+  setStep(s, { k: 'notice', notice: n, revealAt, endsAt: revealAt + noticeMs(n) });
 }
 
 function waitFor(s: GameState, now: number, base: number): number {
@@ -312,6 +329,8 @@ export function reducer(prev: GameState, action: Action, rng: Rng): GameState {
     case 'SKIP_NOTICE': {
       // お知らせを早送りできるのは手番の人だけ。他の人が読んでいる途中で消されないように
       if (s.step.k !== 'notice' || current(s).id !== action.playerId) return prev;
+      // 伏せている間は飛ばせない。手番の人が連打すると、他の人は結果を見ないまま次へ進まされる
+      if (s.step.revealAt !== undefined && now < s.step.revealAt) return prev;
       runThen(s, s.step.notice.then, now, rng);
       return s;
     }
@@ -471,8 +490,26 @@ function resolveCell(s: GameState, now: number, rng: Rng): void {
     case 'SUPER_BAD_HS':
       return say(superBadHighSchool(p, rng), 'bad');
 
-    case 'SUPER_BAD_ADULT':
-      return say(superBadAdult(p, rng), 'bad');
+    case 'SUPER_BAD_ADULT': {
+      // 自分より所持金の多い人にだけ押し付けられる。トップは誰にも押し付けられない（狙われる側）
+      const targets = s.players.filter((x) => x.id !== p.id && x.money > p.money).map((x) => x.id);
+      if (targets.length === 0) return say(['押し付けられる相手がいない…（所持金トップの宿命）', ...superBadAdult(p, rng)], 'bad');
+      return openChoice(s, now, { k: 'superBad', targets });
+    }
+
+    case 'COLLECT_EVENT': {
+      const each = COLLECT_BASE * interactionScale(s);
+      const others = s.players.filter((x) => x.id !== p.id);
+      for (const x of others) x.money -= each;
+      p.money += each * others.length;
+      const why = p.job === 'NONE' || p.job === 'FREETER' ? 'みんなに頼み込んで' : `${JOBS[p.job].name}の仕事で`;
+      return say([`${why}、全員から${yen(each)}ずつ集金！`, `合計${yen(each * others.length)}を受け取った。`], 'good');
+    }
+
+    case 'RIVAL_EVENT': {
+      const targets = s.players.filter((x) => x.id !== p.id).map((x) => x.id);
+      return openChoice(s, now, { k: 'rival', targets, stake: RIVAL_BASE * interactionScale(s) });
+    }
 
     case 'JOB_SELECT':
       return openChoice(s, now, jobChoice(p, false, false, rng));
@@ -737,14 +774,21 @@ function learnable(p: Player, c: SkillCategory): SkillId[] {
   return SKILL_IDS.filter((id) => SKILLS[id].category === c && SKILLS[id].type === 'positive' && !has(p, id));
 }
 
-function jobChoice(p: Player, first: boolean, fromHighSchool: boolean, rng: Rng): Choice {
-  const ids = (Object.keys(JOBS) as JobId[]).filter(
+/** いまのステータスで就ける仕事 */
+function jobsFor(p: Player): JobId[] {
+  return (Object.keys(JOBS) as JobId[]).filter(
     (id) => id !== 'NONE' && (Object.entries(JOBS[id].conditions) as [StatKey, number][]).every(([k, v]) => p.stats[k] >= v),
   );
+}
+
+function jobChoice(p: Player, first: boolean, fromHighSchool: boolean, rng: Rng): Choice {
+  // 転職のときは今の仕事を一覧から外す（「〇〇を続ける」が別にある）。
+  // 旧版は今の仕事も並んでいて、選ぶと給料が初任給に戻り、それまでの昇給が消えていた
+  const ids = jobsFor(p).filter((id) => first || id !== p.job);
   let tip = false;
   // 情報通：条件を満たしていない高給の求人が2割で1つ紛れ込む
   if (has(p, 'JOHOTSU')) {
-    const good = (Object.keys(JOBS) as JobId[]).filter((id) => JOBS[id].salary > 400_000 && !ids.includes(id));
+    const good = (Object.keys(JOBS) as JobId[]).filter((id) => JOBS[id].salary > 400_000 && !ids.includes(id) && id !== p.job);
     if (good.length > 0 && rng() < 0.2) {
       ids.push(pick(rng, good));
       tip = true;
@@ -758,67 +802,191 @@ function jobChoice(p: Player, first: boolean, fromHighSchool: boolean, rng: Rng)
 }
 
 // ---------------------------------------------------------------- 選択肢
-export const LOTTERY_COST = 100_000;
-export const SKILL_SCHOOL_COST = 500_000;
+/*
+ * 2026-09 の見直し（本人の指示）で、答えが決まっていた選択肢に本当の損得を付けた。
+ * 旧版の値だと、宝くじは期待値が代金の3.75倍で「買う」一択、試練は失敗しても失うものがほぼ無く「挑戦」一択、
+ * 海外移住はお金が戻らず「行かない」一択、病気は休んでも給料の総額が減らず治療費が捨て金、だった。
+ * 狙いは「期待値はほぼ五分で、振れ幅が大きい」形。先頭の人は守り、追う人は賭ける、という判断が生まれる
+ */
+/** 宝くじ1枚。ゾロ目（1/36）で1000万、連番（1/9）で元が戻る。期待値は代金の約1.04倍 */
+export const LOTTERY_COST = 300_000;
+export const LOTTERY_JACKPOT = 10_000_000;
+export const LOTTERY_STRAIGHT = 300_000;
+/** 資格の学校。習得するとスキルに加えて、対応するステータスが上がる（上位の仕事の条件に届く） */
+export const SKILL_SCHOOL_COST = 300_000;
+export const SKILL_SCHOOL_STAT_UP = 10;
+/** 人生の試練。成功60%。失敗すると同じ額を失う */
 export const TRIAL_REWARD = 2_000_000;
+export const TRIAL_PENALTY = 2_000_000;
+export const TRIAL_RATE = 0.6;
 export const BUSINESS_COST = 2_000_000;
 export const ABROAD_COST = 1_500_000;
+/** 海外移住に成功したときの稼ぎ。旧版は成功してもお金が戻らなかった */
+export const ABROAD_REWARD_MIN = 3_000_000;
+export const ABROAD_REWARD_MAX = 6_000_000;
 export const ILLNESS_COST = 800_000;
+/** 集金マスで1人から受け取る額と、勝負マスで賭ける額。周回が10進むごとに1倍ずつ膨らむ（旧版のお金のイベントと同じ考え方） */
+export const COLLECT_BASE = 100_000;
+export const RIVAL_BASE = 300_000;
+const interactionScale = (s: GameState): number => 1 + Math.floor(s.round / 10);
+
+const CATEGORY_TO_STAT: Record<SkillCategory, StatKey> = { knowledge: 'academic', physical: 'physical', social: 'charm', life: 'luck' };
+const pct = (r: number): string => `${Math.round(r * 100)}%`;
+
+/** 大学入試の合格ライン（この目以上で合格） */
+export function examRequired(p: Player): number {
+  let required = 4;
+  if (p.stats.academic >= 80) required = 2;
+  else if (p.stats.academic >= 60) required = 3;
+  if (has(p, 'HAKUSHIKI')) required = Math.max(1, required - 1);
+  return required;
+}
+const examRate = (required: number): number => (7 - required) / 6;
+
+function businessRate(p: Player): number {
+  let rate = 0.3 + p.stats.academic / 200 + p.stats.luck / 200;
+  if (has(p, 'JINMYAKU_HOFU')) rate += 0.1;
+  if (has(p, 'SHISAN_UNYO')) rate += 0.1;
+  return Math.max(0.05, Math.min(0.95, rate));
+}
+
+function abroadRate(p: Player): number {
+  let rate = 0.4;
+  if (has(p, 'GOGAKU_TANNO')) rate += 0.3;
+  if (p.stats.luck > 70) rate += 0.15;
+  if (p.stats.charm > 70) rate += 0.1;
+  return Math.max(0.05, Math.min(0.95, rate));
+}
+
+const schoolRate = (p: Player): number => Math.max(0.1, Math.min(1, p.stats.academic / 100 + 0.2));
+
+/** 休みの手番1回ごとにかかる生活費。社会人ボードで給料のある人だけ（学生は0） */
+const restCost = (p: Player): number => (p.board === 'MAIN' ? p.salary : 0);
 
 export type ChoiceOption = { id: string; label: string; sub?: string; disabled?: boolean; tone?: 'primary' | 'danger' | 'plain' };
 
-export function choiceTitle(c: Choice): { title: string; body: string[] } {
+/**
+ * 選択の見出しと説明。判断に要る数字（合格率・成功率・損得）はここで全部見せる。
+ * 旧版は「学費10万円・入試あり」とだけ出して、落ちたらどうなるかを選ぶ人に見せていなかった
+ */
+export function choiceTitle(s: GameState, c: Choice): { title: string; body: string[] } {
+  const p = current(s);
   switch (c.k) {
     case 'hsGraduation':
-      return { title: '🎓 高校卒業！ 進路は？', body: ['この先の人生を選ぼう。'] };
+      return { title: '🎓 高校卒業！ 進路は？', body: ['この先の人生を選ぼう。大学に落ちても、専門学校・浪人・フリーターから選び直せる。'] };
     case 'exam':
       return {
-        title: '📝 大学入学試験',
-        body: [`サイコロで ${c.required} 以上を出せば合格！`, ...(c.hakushiki ? ['スキル「博識」で合格ラインが1つ下がった。'] : [])],
+        title: c.retry ? '📝 大学入学試験（浪人して再挑戦）' : '📝 大学入学試験',
+        body: [
+          `サイコロで ${c.required} 以上を出せば合格！（合格率 ${pct(examRate(c.required))}）`,
+          ...(c.hakushiki ? ['スキル「博識」で合格ラインが1つ下がった。'] : []),
+          ...(c.retry ? ['浪人したので、次の手番はお休み。'] : []),
+        ],
       };
+    case 'examFailed':
+      return { title: '📝 不合格… どうする？', body: ['もう一度だけ道を選べる。'] };
     case 'job':
       return {
         title: c.first ? '💼 最初の仕事を選ぶ' : '💼 就職・転職のチャンス',
-        body: ['いまのステータスで就ける仕事が並んでいる。', ...(c.tip ? ['「情報通」のおかげで特別な求人が見つかった！'] : [])],
+        body: ['いまのステータスで就ける仕事が並んでいる。給料は自分の手番が終わるたびに入る。', ...(c.tip ? ['「情報通」のおかげで特別な求人が見つかった！'] : [])],
       };
     case 'shopping':
-      return { title: '🛒 お買い物チャンス', body: ['買ったものは最後に資産として数える。'] };
+      return { title: '🛒 お買い物チャンス', body: ['買ったものは最後に「資産価値」の額で点数に数える。'] };
     case 'lottery':
-      return { title: '🎰 宝くじチャンス', body: [`1枚${yen(LOTTERY_COST)}。サイコロ3つで役が出れば賞金！`, 'ゾロ目 1000万円／連番 50万円／ワンペア 10万円'] };
+      return {
+        title: '🎰 宝くじチャンス',
+        body: [`1枚${yen(LOTTERY_COST)}。サイコロ3つで役が出れば賞金！`, `ゾロ目 ${yen(LOTTERY_JACKPOT)}（1/36）／連番 ${yen(LOTTERY_STRAIGHT)}（1/9）／それ以外はハズレ`],
+      };
     case 'skillSchool':
-      return { title: '📚 資格の学校', body: [`受講料${yen(SKILL_SCHOOL_COST)}。学力が高いほど習得しやすい。`] };
+      return {
+        title: '📚 資格の学校',
+        body: [
+          `受講料${yen(SKILL_SCHOOL_COST)}。習得率 ${pct(schoolRate(p))}（学力${p.stats.academic}で決まる）。`,
+          `習得するとスキルと、対応するステータス +${SKILL_SCHOOL_STAT_UP}（上の仕事の条件に届くかも）。`,
+        ],
+      };
     case 'trial':
-      return { title: '🔥 人生の試練', body: [`成功すれば${yen(TRIAL_REWARD)}とプラススキル。失敗するとマイナススキルを負うかも。`] };
+      return {
+        title: '🔥 人生の試練',
+        body: [`成功（${pct(TRIAL_RATE)}）：${yen(TRIAL_REWARD)}＋ステータス+10＋プラススキル`, `失敗（${pct(1 - TRIAL_RATE)}）：${yen(TRIAL_PENALTY)}を失う＋マイナススキル`],
+      };
     case 'business':
-      return { title: '🚀 起業のチャンス', body: [`${yen(BUSINESS_COST)}を投資して起業する？`, '学力と運が高いほど成功しやすい。'] };
+      return {
+        title: '🚀 起業のチャンス',
+        body: [
+          `${yen(BUSINESS_COST)}を投資する。成功率 ${pct(businessRate(p))}（学力と運で上がる）。`,
+          '成功：500万〜1000万円の利益。ただし職業が起業家になり、給料は0になる。失敗：投資は戻らない。',
+        ],
+      };
     case 'abroad':
-      return { title: '✈️ 海外移住のチャンス', body: [`${yen(ABROAD_COST)}で海外に挑戦する？`, '語学堪能・運・魅力が高いほど成功しやすい。'] };
-    case 'illness':
+      return {
+        title: '✈️ 海外移住のチャンス',
+        body: [
+          `${yen(ABROAD_COST)}で海外に挑戦する？ 成功率 ${pct(abroadRate(p))}（語学堪能・運・魅力で上がる）。`,
+          '成功：300万〜600万円を稼ぎ、魅力と運もアップ。失敗：さらに余計な出費＋マイナススキル。',
+        ],
+      };
+    case 'illness': {
+      const rc = restCost(p);
+      const treatRest = Math.max(0, c.missTurns - 1);
+      const naturalRest = c.missTurns + 1;
+      const living = (n: number) => (rc > 0 && n > 0 ? `・生活費${yen(rc * n)}` : '');
       return {
         title: '🏥 病気になってしまった…',
-        body: [`治療しないと ${c.missTurns + 1}回休み・体力 -${c.physicalDown}。`, `治療すると ${Math.max(0, c.missTurns - 1)}回休み・体力 -${Math.max(1, Math.round(c.physicalDown * 0.5))}。`],
+        body: [
+          `治療する：${yen(c.cost)}・${treatRest}回休み${living(treatRest)}・体力 -${Math.max(1, Math.round(c.physicalDown * 0.5))}`,
+          `治療しない：${naturalRest}回休み${living(naturalRest)}・体力 -${c.physicalDown}`,
+          ...(rc > 0 ? ['休んでいる間も、1回ごとに給料1回分の生活費がかかる。'] : []),
+        ],
       };
+    }
     case 'branch':
-      return { title: '🔀 分岐点', body: [`${STAT_LABEL[c.stat]}の高さが認められた！ 特別な分岐ルートに挑戦する？`] };
+      return { title: '🔀 分岐点', body: [`${STAT_LABEL[c.stat]}の高さが認められた！ 特別な分岐ルートに挑戦する？`, `${BOARDS.BRANCH_ROUTE.length}マスの寄り道。ステータスアップが多めで、クリアすると元の場所に戻る。`] };
+    case 'superBad':
+      return { title: '⚡ 超BAD！', body: ['何か悪いことが起こる…。自分より所持金の多い人に押し付けることもできる。'] };
+    case 'rival':
+      return { title: '⚔️ 勝負マス', body: [`誰かにサイコロ勝負を挑める。出目の大きい方が相手から${yen(c.stake)}を奪う（同じ目なら引き分け）。`] };
   }
 }
 
 export function choiceOptions(s: GameState, c: Choice): ChoiceOption[] {
   const p = current(s);
   switch (c.k) {
-    case 'hsGraduation':
+    case 'hsGraduation': {
+      const req = examRequired(p);
+      const jobs = jobsFor(p).sort((a, b) => JOBS[b].salary - JOBS[a].salary);
+      const best = jobs[0];
       return [
-        { id: 'university', label: '大学に進学', sub: `学費${yen(BOARDS.UNIVERSITY.tuition!)}・入試あり`, tone: 'primary' },
-        { id: 'professional', label: '専門学校に進学', sub: `学費${yen(BOARDS.PROFESSIONAL_SCHOOL.tuition!)}`, tone: 'primary' },
-        { id: 'work', label: '就職する', sub: 'すぐ社会へ', tone: 'primary' },
+        {
+          id: 'university',
+          label: '大学に進学',
+          sub: `学費${yen(BOARDS.UNIVERSITY.tuition!)}・入試：学力${p.stats.academic}なら${req}以上で合格（${pct(examRate(req))}）・${BOARDS.UNIVERSITY.length}マス`,
+          tone: 'primary',
+        },
+        { id: 'professional', label: '専門学校に進学', sub: `学費${yen(BOARDS.PROFESSIONAL_SCHOOL.tuition!)}・入試なし・${BOARDS.PROFESSIONAL_SCHOOL.length}マス`, tone: 'primary' },
+        {
+          id: 'work',
+          label: '就職する',
+          sub: `すぐ社会へ。いま就ける仕事 ${jobs.length}件${best ? `（最高 ${JOBS[best].name} 給料${yen(JOBS[best].salary)}）` : ''}`,
+          tone: 'primary',
+        },
       ];
+    }
     case 'exam':
       return [{ id: 'roll', label: '運命のサイコロを振る', tone: 'primary' }];
+    case 'examFailed':
+      return [
+        { id: 'professional', label: '専門学校に回る', sub: `学費${yen(BOARDS.PROFESSIONAL_SCHOOL.tuition!)}・入試なし・${BOARDS.PROFESSIONAL_SCHOOL.length}マス`, tone: 'primary' },
+        ...(c.canRetry
+          ? [{ id: 'ronin', label: '浪人してもう一度受ける', sub: `1回休み・合格率 ${pct(examRate(examRequired(p)))}（もう後はない）`, tone: 'danger' as const }]
+          : []),
+        { id: 'freeter', label: 'フリーターとして社会に出る', sub: `給料${yen(JOBS.FREETER.salary)}から`, tone: 'plain' },
+      ];
     case 'job': {
       const opts: ChoiceOption[] = c.jobs.map((id) => {
         const j = JOBS[id];
         const cond = (Object.entries(j.conditions) as [StatKey, number][]).map(([k, v]) => `${STAT_LABEL[k]}${v}`).join('・') || '条件なし';
-        return { id, label: j.name, sub: `月給${yen(j.salary)}${j.oneTimeBonus ? `・就職祝い${yen(j.oneTimeBonus)}` : ''}（${cond}）`, tone: 'primary' };
+        return { id, label: j.name, sub: `給料${yen(j.salary)}${j.oneTimeBonus ? `・就職祝い${yen(j.oneTimeBonus)}` : ''}（${cond}）`, tone: 'primary' };
       });
       if (c.reconsider) opts.push({ id: 'reconsider', label: 'やっぱり進学を考え直す', tone: 'plain' });
       if (!c.first) opts.push({ id: 'keep', label: p.job === 'NONE' ? '今回は見送る' : `${JOBS[p.job].name}を続ける`, tone: 'plain' });
@@ -826,18 +994,22 @@ export function choiceOptions(s: GameState, c: Choice): ChoiceOption[] {
     }
     case 'shopping':
       return [
-        ...c.items.map((id) => ({
-          id,
-          label: `${ITEMS[id].icon} ${ITEMS[id].name}`,
-          sub: `${yen(ITEMS[id].price)}${p.money < ITEMS[id].price ? '（お金が足りない）' : ''}`,
-          disabled: p.money < ITEMS[id].price,
-          tone: 'primary' as const,
-        })),
+        ...c.items.map((id) => {
+          const it = ITEMS[id];
+          const value = it.assetValue === 'random' ? '資産価値は買うまで分からない' : `資産価値${yen(it.assetValue)}`;
+          return {
+            id,
+            label: `${it.icon} ${it.name}`,
+            sub: `${yen(it.price)}・${value}${p.money < it.price ? '（お金が足りない）' : ''}`,
+            disabled: p.money < it.price,
+            tone: 'primary' as const,
+          };
+        }),
         { id: 'none', label: '何も買わない', tone: 'plain' },
       ];
     case 'lottery':
       return [
-        { id: 'buy', label: '買う！', sub: yen(LOTTERY_COST), tone: 'primary' },
+        { id: 'buy', label: '買う！', sub: yen(LOTTERY_COST), disabled: p.money < LOTTERY_COST, tone: 'primary' },
         { id: 'skip', label: 'やめておく', tone: 'plain' },
       ];
     case 'skillSchool':
@@ -845,7 +1017,7 @@ export function choiceOptions(s: GameState, c: Choice): ChoiceOption[] {
         ...c.categories.map((cat) => ({
           id: cat,
           label: `${SKILL_CATEGORY_LABEL[cat]}系スキルを学ぶ`,
-          sub: yen(SKILL_SCHOOL_COST),
+          sub: `${yen(SKILL_SCHOOL_COST)}・習得すると${STAT_LABEL[CATEGORY_TO_STAT[cat]]} ${p.stats[CATEGORY_TO_STAT[cat]]} → ${clampStat(p.stats[CATEGORY_TO_STAT[cat]] + SKILL_SCHOOL_STAT_UP)}`,
           disabled: p.money < SKILL_SCHOOL_COST,
           tone: 'primary' as const,
         })),
@@ -853,17 +1025,17 @@ export function choiceOptions(s: GameState, c: Choice): ChoiceOption[] {
       ];
     case 'trial':
       return [
-        { id: 'go', label: '挑戦する！', sub: '成功率60%', tone: 'danger' },
+        { id: 'go', label: '挑戦する！', sub: `成功率${pct(TRIAL_RATE)}・±${yen(TRIAL_REWARD)}`, tone: 'danger' },
         { id: 'skip', label: 'やめておく', tone: 'plain' },
       ];
     case 'business':
       return [
-        { id: 'go', label: '起業する', sub: yen(BUSINESS_COST), disabled: p.money < BUSINESS_COST, tone: 'danger' },
+        { id: 'go', label: '起業する', sub: `${yen(BUSINESS_COST)}・成功率${pct(businessRate(p))}`, disabled: p.money < BUSINESS_COST, tone: 'danger' },
         { id: 'skip', label: 'やめておく', tone: 'plain' },
       ];
     case 'abroad':
       return [
-        { id: 'go', label: '移住する', sub: yen(ABROAD_COST), disabled: p.money < ABROAD_COST, tone: 'danger' },
+        { id: 'go', label: '移住する', sub: `${yen(ABROAD_COST)}・成功率${pct(abroadRate(p))}`, disabled: p.money < ABROAD_COST, tone: 'danger' },
         { id: 'skip', label: '日本に残る', tone: 'plain' },
       ];
     case 'illness':
@@ -876,12 +1048,29 @@ export function choiceOptions(s: GameState, c: Choice): ChoiceOption[] {
         { id: 'go', label: '挑戦する', tone: 'primary' },
         { id: 'skip', label: 'やめておく', tone: 'plain' },
       ];
+    case 'superBad':
+      return [
+        ...c.targets.map((id) => {
+          const t = s.players.find((x) => x.id === id)!;
+          return { id, label: `${t.name}に押し付ける`, sub: `所持金${yen(t.money)}`, tone: 'danger' as const };
+        }),
+        { id: 'self', label: '自分で受け止める', tone: 'plain' },
+      ];
+    case 'rival':
+      return [
+        ...c.targets.map((id) => {
+          const t = s.players.find((x) => x.id === id)!;
+          return { id, label: `${t.name}に勝負を挑む`, sub: `所持金${yen(t.money)}`, tone: 'danger' as const };
+        }),
+        { id: 'skip', label: '今回はやめておく', tone: 'plain' },
+      ];
   }
 }
 
 /**
  * 時間切れ・不在のときに選んだことにする選択肢。お金を使わない、賭けない方に倒す。
- * 放っておいた人が得をしないように、最初の仕事だけは「条件なしで就けるフリーター」にする
+ * 放っておいた人が得をしないように、最初の仕事だけは「条件なしで就けるフリーター」にする。
+ * 他人を巻き込む選択（押し付け・勝負）も、本人がいないところで他人に仕掛けないよう、しない方に倒す
  */
 export function defaultOption(s: GameState, c: Choice): string {
   const p = current(s);
@@ -890,6 +1079,9 @@ export function defaultOption(s: GameState, c: Choice): string {
       return 'work';
     case 'exam':
       return 'roll';
+    case 'examFailed':
+      // 旧版の「不合格ならフリーター」と同じ結果にする
+      return 'freeter';
     case 'job':
       return c.first ? (c.jobs.includes('FREETER') ? 'FREETER' : c.jobs[c.jobs.length - 1]!) : 'keep';
     case 'shopping':
@@ -900,7 +1092,10 @@ export function defaultOption(s: GameState, c: Choice): string {
     case 'business':
     case 'abroad':
     case 'branch':
+    case 'rival':
       return 'skip';
+    case 'superBad':
+      return 'self';
     case 'illness':
       return p.money >= c.cost ? 'treat' : 'natural';
   }
@@ -912,44 +1107,64 @@ function resolveChoice(s: GameState, c: Choice, opt: string, now: number, rng: R
     log(s, `${p.name}：${lines.join(' ')}`, tone, p.id);
     notice(s, now, { title, lines, tone, then: { k: 'endTurn' }, ...extra });
   };
+  const toBoard = (board: BoardKey) => {
+    p.board = board;
+    p.position = 0;
+    p.isGoal = false;
+    p.turnsOnBoard = 0;
+  };
 
   switch (c.k) {
     case 'hsGraduation': {
-      p.isGoal = false;
-      p.position = 0;
-      p.turnsOnBoard = 0;
       if (opt === 'professional') {
         const t = BOARDS.PROFESSIONAL_SCHOOL.tuition!;
-        p.board = 'PROFESSIONAL_SCHOOL';
+        toBoard('PROFESSIONAL_SCHOOL');
         p.money -= t;
         return done('🎓 専門学校に進学！', [`学費${yen(t)}を支払った。`], 'event');
       }
       if (opt === 'university') {
+        // 合否が出るまでは高校のゴールに立たせておく。先にスタートへ戻すと、落ちる前から次の盤に移ったように見える
         const t = BOARDS.UNIVERSITY.tuition!;
         p.money -= t;
         log(s, `${p.name}は大学進学を目指す。学費${yen(t)}を支払った。`, 'event', p.id);
-        let required = 4;
-        if (p.stats.academic >= 80) required = 2;
-        else if (p.stats.academic >= 60) required = 3;
-        const hakushiki = has(p, 'HAKUSHIKI');
-        if (hakushiki) required = Math.max(1, required - 1);
-        return openChoice(s, now, { k: 'exam', required, hakushiki });
+        return openChoice(s, now, { k: 'exam', required: examRequired(p), hakushiki: has(p, 'HAKUSHIKI'), retry: false });
       }
-      p.board = 'MAIN';
+      toBoard('MAIN');
       log(s, `${p.name}は就職の道を選んだ。いざ社会へ！`, 'event', p.id);
       return openChoice(s, now, jobChoice(p, true, true, rng));
     }
 
     case 'exam': {
       const d = int(rng, 6) + 1;
+      const suspense = '📝 合否は…';
       if (d >= c.required) {
-        p.board = 'UNIVERSITY';
-        return done('📝 合格！', [`出目は ${d}！ おめでとう、夢の大学生活が始まる！`], 'good', { dice: [d] });
+        toBoard('UNIVERSITY');
+        return done('📝 合格！', [`出目は ${d}！ おめでとう、夢の大学生活が始まる！`], 'good', { dice: [d], suspense });
       }
-      p.board = 'MAIN';
+      // 旧版はここで即フリーターだった。1投で4割が脱落していたので、選び直せるようにした（本人の指示）
+      return done('📝 不合格…', [`出目は ${d}…（必要: ${c.required}以上）`], 'bad', {
+        dice: [d],
+        suspense,
+        then: { k: 'choice', choice: { k: 'examFailed', canRetry: !c.retry } },
+      });
+    }
+
+    case 'examFailed': {
+      if (opt === 'professional') {
+        const t = BOARDS.PROFESSIONAL_SCHOOL.tuition!;
+        toBoard('PROFESSIONAL_SCHOOL');
+        p.money -= t;
+        return done('🎓 専門学校へ！', [`気持ちを切り替えて専門学校へ。学費${yen(t)}を支払った。`], 'event');
+      }
+      if (opt === 'ronin') {
+        p.missTurns += 1;
+        log(s, `${p.name}は浪人して、もう一度受験することにした。`, 'event', p.id);
+        return openChoice(s, now, { k: 'exam', required: examRequired(p), hakushiki: has(p, 'HAKUSHIKI'), retry: true });
+      }
+      toBoard('MAIN');
       p.job = 'FREETER';
       p.salary = JOBS.FREETER.salary;
-      return done('📝 不合格…', [`出目は ${d}…（必要: ${c.required}以上）`, 'フリーターとして社会に出る。'], 'bad', { dice: [d] });
+      return done('💼 フリーターとして社会へ', ['フリーターとして社会に出る。'], 'event');
     }
 
     case 'job': {
@@ -962,7 +1177,7 @@ function resolveChoice(s: GameState, c: Choice, opt: string, now: number, rng: R
       const j = JOBS[id];
       p.job = id;
       p.salary = j.salary;
-      const lines = [`「${j.name}」になった！ 月給${yen(j.salary)}`];
+      const lines = [`「${j.name}」になった！ 給料${yen(j.salary)}`];
       if (j.oneTimeBonus) {
         p.money += j.oneTimeBonus;
         lines.push(`就職祝い${yen(j.oneTimeBonus)}！`);
@@ -977,7 +1192,7 @@ function resolveChoice(s: GameState, c: Choice, opt: string, now: number, rng: R
       p.money -= item.price;
       const value = item.assetValue === 'random' ? Math.floor(rng() * (500_000 - 500 + 1)) + 500 : item.assetValue;
       p.possessions.push({ itemId: id, price: item.price, assetValue: value });
-      return done('🛒 お買い上げ！', [`${item.icon} ${item.name}を${yen(item.price)}で購入した。`], 'event');
+      return done('🛒 お買い上げ！', [`${item.icon} ${item.name}を${yen(item.price)}で購入した。`, ...(item.assetValue === 'random' ? [`資産価値は…${yen(value)}！`] : [])], 'event');
     }
 
     case 'lottery': {
@@ -988,76 +1203,81 @@ function resolveChoice(s: GameState, c: Choice, opt: string, now: number, rng: R
       const sorted = [...dice].sort((a, b) => a - b);
       let prize = 0;
       let label = 'ハズレ…';
-      if (unique === 1) (prize = 10_000_000), (label = 'ゾロ目！ ジャックポット！');
-      else if (sorted[0]! + 1 === sorted[1] && sorted[1]! + 1 === sorted[2]) (prize = 500_000), (label = '連番！');
-      else if (unique === 2) (prize = 100_000), (label = 'ワンペア！');
+      if (unique === 1) (prize = LOTTERY_JACKPOT), (label = 'ゾロ目！ ジャックポット！');
+      else if (sorted[0]! + 1 === sorted[1] && sorted[1]! + 1 === sorted[2]) (prize = LOTTERY_STRAIGHT), (label = '連番！ 元が取れた！');
       p.money += prize;
-      return done('🎰 宝くじの結果', [label, prize > 0 ? `${yen(prize)}獲得！` : '賞金なし。'], prize > 0 ? 'good' : 'bad', { dice });
+      return done('🎰 宝くじの結果', [label, prize > 0 ? `${yen(prize)}獲得！` : '賞金なし。'], prize > 0 ? 'good' : 'bad', { dice, suspense: '🎰 抽選中…' });
     }
 
     case 'skillSchool': {
       if (opt === 'none') return done('📚 見送り', ['今回は何も学ばなかった。'], 'info');
       p.money -= SKILL_SCHOOL_COST;
-      const rate = Math.max(0.1, Math.min(1, p.stats.academic / 100 + 0.2));
-      const pool = learnable(p, opt as SkillCategory);
-      if (pool.length > 0 && rng() < rate) {
+      const cat = opt as SkillCategory;
+      const pool = learnable(p, cat);
+      const suspense = '📚 試験の結果は…';
+      if (pool.length > 0 && rng() < schoolRate(p)) {
         const id = pick(rng, pool);
         p.skills.push(id);
-        return done('📚 資格取得！', [`受講料${yen(SKILL_SCHOOL_COST)}を支払い、スキル「${SKILLS[id].name}」を習得した！`], 'good');
+        const stat = CATEGORY_TO_STAT[cat];
+        const old = p.stats[stat];
+        p.stats[stat] = clampStat(old + SKILL_SCHOOL_STAT_UP);
+        return done('📚 資格取得！', [`スキル「${SKILLS[id].name}」を習得した！`, `${STAT_LABEL[stat]} ${old} → ${p.stats[stat]}`], 'good', { suspense });
       }
-      return done('📚 残念…', [`受講料${yen(SKILL_SCHOOL_COST)}を支払ったが、何も習得できなかった…`], 'bad');
+      return done('📚 残念…', [`受講料${yen(SKILL_SCHOOL_COST)}を支払ったが、何も習得できなかった…`], 'bad', { suspense });
     }
 
     case 'trial': {
       if (opt === 'skip') return done('🔥 見送り', ['今回は試練を見送った。'], 'info');
-      if (rng() < 0.6) {
+      const suspense = '🔥 試練に挑む…';
+      if (rng() < TRIAL_RATE) {
         p.money += TRIAL_REWARD;
         const stat = pick(rng, STAT_KEYS);
         p.stats[stat] = clampStat(p.stats[stat] + 10);
         const gained = tryGainSkill(p, 'positive', rng);
-        return done('🔥 試練を乗り越えた！', [`報酬${yen(TRIAL_REWARD)}と${STAT_LABEL[stat]} +10！`, ...(gained ? [gained] : [])], 'good');
+        return done('🔥 試練を乗り越えた！', [`報酬${yen(TRIAL_REWARD)}と${STAT_LABEL[stat]} +10！`, ...(gained ? [gained] : [])], 'good', { suspense });
       }
+      p.money -= TRIAL_PENALTY;
       const gained = tryGainSkill(p, 'negative', rng);
-      return done('🔥 試練に失敗…', [gained ?? 'しかし、特に悪いことは起こらなかった。'], 'bad');
+      return done('🔥 試練に失敗…', [`${yen(TRIAL_PENALTY)}を失った…`, ...(gained ? [gained] : [])], 'bad', { suspense });
     }
 
     case 'business': {
       if (opt === 'skip') return done('🚀 見送り', ['今回は堅実にいくことにした。'], 'info');
       p.money -= BUSINESS_COST;
-      let rate = 0.3 + p.stats.academic / 200 + p.stats.luck / 200;
-      if (has(p, 'JINMYAKU_HOFU')) rate += 0.1;
-      if (has(p, 'SHISAN_UNYO')) rate += 0.1;
-      rate = Math.max(0.05, Math.min(0.95, rate));
-      if (rng() < rate) {
+      const suspense = '🚀 事業の行方は…';
+      if (rng() < businessRate(p)) {
         const profit = Math.floor(rng() * 5 + 5) * 1_000_000;
         p.money += profit;
         p.job = 'ENTREPRENEUR';
         p.salary = JOBS.ENTREPRENEUR.salary;
-        return done('🚀 起業大成功！', [`事業が軌道に乗り、${yen(profit)}の利益！`, '職業が「起業家」になった。'], 'good');
+        return done('🚀 起業大成功！', [`事業が軌道に乗り、${yen(profit)}の利益！`, '職業が「起業家」になった。'], 'good', { suspense });
       }
-      return done('🚀 起業失敗…', [`投資した${yen(BUSINESS_COST)}は水の泡に…`], 'bad');
+      return done('🚀 起業失敗…', [`投資した${yen(BUSINESS_COST)}は水の泡に…`], 'bad', { suspense });
     }
 
     case 'abroad': {
       if (opt === 'skip') return done('✈️ 見送り', ['やはり故郷が一番だ。'], 'info');
       p.money -= ABROAD_COST;
-      let rate = 0.4;
-      if (has(p, 'GOGAKU_TANNO')) rate += 0.3;
-      if (p.stats.luck > 70) rate += 0.15;
-      if (p.stats.charm > 70) rate += 0.1;
-      rate = Math.max(0.05, Math.min(0.95, rate));
-      if (rng() < rate) {
+      const suspense = '✈️ 海外生活の行方は…';
+      if (rng() < abroadRate(p)) {
+        const earned = Math.floor((rng() * (ABROAD_REWARD_MAX - ABROAD_REWARD_MIN)) / 100_000) * 100_000 + ABROAD_REWARD_MIN;
+        p.money += earned;
         const oc = p.stats.charm;
         const ol = p.stats.luck;
         p.stats.charm = clampStat(oc + int(rng, 10) + 5);
         p.stats.luck = clampStat(ol + int(rng, 10) + 5);
         const gained = has(p, 'GOGAKU_TANNO') ? null : tryGainSkill(p, 'positive', rng, 'knowledge');
-        return done('✈️ 移住成功！', ['新たな環境で刺激的な日々が始まった！', `魅力 ${oc} → ${p.stats.charm}・運 ${ol} → ${p.stats.luck}`, ...(gained ? [gained] : [])], 'good');
+        return done(
+          '✈️ 移住成功！',
+          [`海外で成功し、${yen(earned)}を稼いだ！`, `魅力 ${oc} → ${p.stats.charm}・運 ${ol} → ${p.stats.luck}`, ...(gained ? [gained] : [])],
+          'good',
+          { suspense },
+        );
       }
       const extra = Math.floor(ABROAD_COST * (rng() * 0.3 + 0.1));
       p.money -= extra;
       const gained = tryGainSkill(p, 'negative', rng, 'social');
-      return done('✈️ 移住失敗…', [`移住先でトラブル発生… 余計な出費${yen(extra)}。`, ...(gained ? [gained] : [])], 'bad');
+      return done('✈️ 移住失敗…', [`移住先でトラブル発生… 余計な出費${yen(extra)}。`, ...(gained ? [gained] : [])], 'bad', { suspense });
     }
 
     case 'illness': {
@@ -1081,11 +1301,32 @@ function resolveChoice(s: GameState, c: Choice, opt: string, now: number, rng: R
     case 'branch': {
       if (opt === 'skip') return done('🔀 見送り', ['いまの道を進む。'], 'info');
       p.branchReturn = p.position;
-      p.board = 'BRANCH_ROUTE';
-      p.position = 0;
-      p.isGoal = false;
-      p.turnsOnBoard = 0;
+      toBoard('BRANCH_ROUTE');
       return done('🔀 分岐ルートへ！', [`${p.name}は新たな道へ進んだ！`], 'event');
+    }
+
+    case 'superBad': {
+      const target = opt === 'self' ? p : s.players.find((x) => x.id === opt)!;
+      const lines = superBadAdult(target, rng);
+      if (target === p) return done('⚡ 超BAD！', lines, 'bad', { suspense: '⚡ 何が起こる…？' });
+      log(s, `${p.name}は災難を${target.name}に押し付けた！`, 'event', p.id);
+      return done('⚡ 押し付けた！', [`${p.name}は災難を${target.name}に押し付けた！`, ...lines.map((l) => `${target.name}：${l}`)], 'bad', {
+        suspense: `⚡ ${target.name}に何が起こる…？`,
+      });
+    }
+
+    case 'rival': {
+      if (opt === 'skip') return done('⚔️ 見送り', ['今回は勝負をやめておいた。'], 'info');
+      const t = s.players.find((x) => x.id === opt)!;
+      const a = int(rng, 6) + 1;
+      const b = int(rng, 6) + 1;
+      const head = `${p.name} ${a} − ${b} ${t.name}`;
+      const suspense = `⚔️ ${p.name} vs ${t.name}`;
+      if (a === b) return done('⚔️ 引き分け', [head, '互角！ お金は動かなかった。'], 'info', { dice: [a, b], suspense });
+      const [win, lose] = a > b ? [p, t] : [t, p];
+      win.money += c.stake;
+      lose.money -= c.stake;
+      return done(`⚔️ ${win.name}の勝ち！`, [head, `${win.name}が${lose.name}から${yen(c.stake)}を奪った！`], win === p ? 'good' : 'bad', { dice: [a, b], suspense });
     }
   }
 }
@@ -1134,7 +1375,7 @@ function endTurn(s: GameState, now: number, rng: Rng): void {
   let raise: string | null = null;
   if (p.board === 'MAIN' && JOBS[p.job].salaryUp > 0 && rng() < 0.05) {
     p.salary += JOBS[p.job].salaryUp;
-    raise = `${JOBS[p.job].name}の月給が${yen(JOBS[p.job].salaryUp)}上がって${yen(p.salary)}に！`;
+    raise = `${JOBS[p.job].name}の給料が${yen(JOBS[p.job].salaryUp)}上がって${yen(p.salary)}に！`;
     log(s, `${p.name}：昇給！ ${raise}`, 'good', p.id);
   }
 
@@ -1166,7 +1407,11 @@ function nextPlayer(s: GameState, now: number): void {
     if (p.isGoal && p.board === 'MAIN') continue;
     if (p.missTurns > 0) {
       p.missTurns -= 1;
-      log(s, `${p.name}はお休み。${p.missTurns > 0 ? `（あと${p.missTurns}回）` : '次から動ける。'}`, 'info', p.id);
+      // 休んでいる間も生活費がかかる（2026-09 に足したルール）。旧版は休んでも給料の総額が変わらず
+      // （ゴールまでに振る回数は同じなので）、休みが罰にならず、病気の治療費はただの捨て金だった
+      const cost = restCost(p);
+      p.money -= cost;
+      log(s, `${p.name}はお休み。${cost > 0 ? `生活費${yen(cost)}。` : ''}${p.missTurns > 0 ? `（あと${p.missTurns}回）` : '次から動ける。'}`, cost > 0 ? 'bad' : 'info', p.id);
       continue;
     }
     setStep(s, { k: 'roll', deadline: waitFor(s, now, ROLL_MS) });

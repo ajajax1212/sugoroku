@@ -4,9 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server, type Socket } from 'socket.io';
-import { type Action, reducer, stepDeadline } from '../src/engine/game';
+import { type Action, current, reducer, stepDeadline } from '../src/engine/game';
 import { viewOf } from '../src/engine/view';
-import { EV, MAX_PLAYERS, MIN_PLAYERS, clampCourse } from '../src/net/events';
+import { EV, MAX_PLAYERS, MIN_PLAYERS, REACT_INTERVAL_MS, clampCourse, isReaction } from '../src/net/events';
 import { type Room, addPlayer, clearTimer, createRoom, dropSeat, effectiveHostId, getRoom, reattach, sweepIdleRooms } from './rooms';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -204,6 +204,22 @@ io.on('connection', (socket) => {
       dispatch(room, { type: 'SKIP_NOTICE', playerId, now: Date.now() });
       // 二度押しや、ちょうど時間切れで進んだ直後は何もしない。失敗表示は出さなくてよい
       if (room.game !== before) broadcast(room);
+      ack?.({ ok: true });
+    });
+  });
+
+  socket.on(EV.react, ({ code, emoji }: { code?: unknown; emoji?: unknown } = {}, ack?: Ack) => {
+    withRoom(socket, code, ack, (room, playerId) => {
+      if (!room.game || room.game.step.k === 'finished') return ack?.({ ok: false, error: 'いまは送れません' });
+      if (!isReaction(emoji)) return ack?.({ ok: false, error: 'そのリアクションは送れません' });
+      // 手番の人は送れない。自分の番に自分で盛り上げても、観客の声にならない
+      if (current(room.game).id === playerId) return ack?.({ ok: false, error: '自分の番には送れません' });
+      const player = room.players.find((p) => p.id === playerId)!;
+      const now = Date.now();
+      if (now - player.lastReactAt < REACT_INTERVAL_MS) return ack?.({ ok: false });
+      player.lastReactAt = now;
+      // 状態（broadcast）には載せず、流れて消えるだけのイベントとして配る。状態に溜めると毎回の通信が太る
+      io.to(room.code).emit(EV.reaction, { playerId, emoji });
       ack?.({ ok: true });
     });
   });

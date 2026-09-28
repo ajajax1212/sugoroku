@@ -25,9 +25,23 @@ export const EV = {
   choose: 'game:choose',
   /** 手番の人がお知らせを早送りする */
   skipNotice: 'game:skipNotice',
+  /** 手番でない人がリアクションを送る → { ok } */
+  react: 'game:react',
+  /** サーバー → クライアント。誰かのリアクション。ゲームの状態には入れない（流れて消えるだけのもの） */
+  reaction: 'reaction',
   /** サーバー → クライアント。部屋とゲームの状態 */
   state: 'state',
 } as const;
+
+/**
+ * 押せるリアクション。自由入力にしないのは、画面に流すものを検証しやすくするためと、
+ * 知らない人と遊ぶ部屋で悪口を流せないようにするため
+ */
+export const REACTIONS = ['👏', '😱', '🤣', '💸', '🙏', '🔥'] as const;
+export type Reaction = (typeof REACTIONS)[number];
+export const isReaction = (x: unknown): x is Reaction => typeof x === 'string' && (REACTIONS as readonly string[]).includes(x);
+/** 1人がリアクションを送れる間隔。連打で画面を埋められないように */
+export const REACT_INTERVAL_MS = 700;
 
 export type EventName = (typeof EV)[keyof typeof EV];
 

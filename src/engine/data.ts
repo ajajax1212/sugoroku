@@ -1,5 +1,5 @@
 /**
- * ルールの数値。旧版（public/constants.js）から値を変えずに移植したもの。
+ * ルールの数値。旧版（public/constants.js）から移植したもの。変えた箇所はその場に理由と旧値を書いてある。
  * バランスに関わるので、ここの数字を変えるときは必ず本人に確認する。
  *
  * 旧版にあった Tailwind のクラス名（色）は画面の都合なので ui/ 側へ移した。
@@ -46,7 +46,9 @@ export type CellType =
   | 'START_BUSINESS_EVENT'
   | 'MOVE_ABROAD_EVENT'
   | 'ILLNESS_EVENT'
-  | 'INHERITANCE_EVENT';
+  | 'INHERITANCE_EVENT'
+  | 'COLLECT_EVENT'
+  | 'RIVAL_EVENT';
 
 export const CELL_INFO: Record<CellType, { icon: string; name: string }> = {
   START: { icon: '🏠', name: 'スタート' },
@@ -76,6 +78,8 @@ export const CELL_INFO: Record<CellType, { icon: string; name: string }> = {
   MOVE_ABROAD_EVENT: { icon: '✈️', name: '海外移住' },
   ILLNESS_EVENT: { icon: '🏥', name: '病気' },
   INHERITANCE_EVENT: { icon: '📜', name: '遺産相続' },
+  COLLECT_EVENT: { icon: '🤝', name: '集金' },
+  RIVAL_EVENT: { icon: '⚔️', name: '勝負' },
 };
 
 export type JobId =
@@ -112,6 +116,11 @@ export type Job = {
   special?: boolean;
 };
 
+/**
+ * 就職祝い（oneTimeBonus）は 2026-09 に旧版の3割へ下げた（本人の指示）。
+ * 旧版の1000万円は最終スコアの中央値（約960万円）より大きく、就職した瞬間に体力が85あったかで
+ * ほぼ勝負が決まっていた（スポーツ選手の勝率68%）。旧版: スポーツ選手1000万・モデル700万・芸能人500万
+ */
 export const JOBS: Record<JobId, Job> = {
   NONE: { name: 'なし', conditions: {}, salary: 0, salaryUp: 0 },
   FREETER: { name: 'フリーター', conditions: {}, salary: 100_000, salaryUp: 5_000, description: '自由な働き方だが収入は不安定。' },
@@ -119,8 +128,8 @@ export const JOBS: Record<JobId, Job> = {
   DOCTOR: { name: '医者', conditions: { academic: 90, physical: 70 }, salary: 700_000, salaryUp: 50_000, description: '人々の命を救う高給取りだが、責任も重い。' },
   LAWYER: { name: '弁護士', conditions: { academic: 90 }, salary: 650_000, salaryUp: 45_000, description: '法の下の正義を実現する。高い学識が求められる。' },
   TEACHER: { name: '教師', conditions: { academic: 65, charm: 60 }, salary: 300_000, salaryUp: 25_000, description: '未来を担う若者を育てる、やりがいのある仕事。' },
-  ATHLETE: { name: 'スポーツ選手', conditions: { physical: 85 }, salary: 650_000, salaryUp: 60_000, oneTimeBonus: 10_000_000, description: '努力と才能で頂点を目指す。体力と運が重要。' },
-  CELEBRITY: { name: '芸能人', conditions: { charm: 85 }, salary: 600_000, salaryUp: 70_000, oneTimeBonus: 5_000_000, description: '人気と才能で輝くスター。魅力が成功の鍵。' },
+  ATHLETE: { name: 'スポーツ選手', conditions: { physical: 85 }, salary: 650_000, salaryUp: 60_000, oneTimeBonus: 3_000_000, description: '努力と才能で頂点を目指す。体力と運が重要。' },
+  CELEBRITY: { name: '芸能人', conditions: { charm: 85 }, salary: 600_000, salaryUp: 70_000, oneTimeBonus: 1_500_000, description: '人気と才能で輝くスター。魅力が成功の鍵。' },
   YOUTUBER: { name: 'Youtuber', conditions: { charm: 70, academic: 50 }, salary: 400_000, salaryUp: 100_000, description: '動画配信で一攫千金も夢じゃない！？企画力と魅力が問われる。' },
   WEB_DESIGNER: { name: 'Webデザイナー', conditions: { academic: 60, charm: 50 }, salary: 350_000, salaryUp: 30_000, description: 'ウェブサイトをデザインするクリエイティブな仕事。' },
   ILLUSTRATOR: { name: 'イラストレーター/漫画家', conditions: { academic: 50, charm: 65 }, salary: 300_000, salaryUp: 35_000, description: '絵や物語で人々を魅了する。発想力と画力が大切。' },
@@ -131,7 +140,7 @@ export const JOBS: Record<JobId, Job> = {
   TREASURE_HUNTER: { name: 'トレジャーハンター', conditions: { physical: 70, luck: 70 }, salary: 100_000, salaryUp: 10_000, special: true, description: '遺跡や秘境を探索し、失われた財宝を発見するロマン溢れる職業。体力と運が重要。' },
   GAMBLER: { name: 'ギャンブラー', conditions: { luck: 75 }, salary: 50_000, salaryUp: 0, special: true, description: '一攫千金を夢見る勝負師。運が全てを左右するスリリングな生き方。' },
   ARTIST: { name: '芸術家', conditions: { charm: 70, academic: 60 }, salary: 80_000, salaryUp: 10_000, special: true, description: '独自の感性で作品を創造し、人々の心を動かす。魅力と学識が成功の鍵。' },
-  MODEL: { name: 'モデル', conditions: { charm: 90, physical: 70 }, salary: 550_000, salaryUp: 65_000, oneTimeBonus: 7_000_000, description: 'ファッション界の華。美貌とスタイルが求められる。' },
+  MODEL: { name: 'モデル', conditions: { charm: 90, physical: 70 }, salary: 550_000, salaryUp: 65_000, oneTimeBonus: 2_100_000, description: 'ファッション界の華。美貌とスタイルが求められる。' },
   VOICE_ACTOR: { name: '声優', conditions: { charm: 80, academic: 50 }, salary: 450_000, salaryUp: 40_000, description: '声でキャラクターに命を吹き込む。表現力と演技力が必要。' },
   INFLUENCER: { name: 'インフルエンサー', conditions: { charm: 90 }, salary: 400_000, salaryUp: 100_000, description: 'SNSで情報を発信し、多くの人に影響を与える。' },
   ENTREPRENEUR: { name: '起業家', conditions: { academic: 60, luck: 60 }, salary: 0, salaryUp: 0, description: '自ら事業を興し、夢を追いかける。成功すれば巨万の富も。' },
@@ -254,6 +263,11 @@ export const MAIN_BOARD_WEIGHTS: Partial<Record<CellType, number>> = {
   INHERITANCE_EVENT: 0.01,
   STATUS_GOOD: 0.1,
   STATUS_BAD: 0.1,
+  // ここから下は作り直しで足したもの（2026-09、本人の指示）。他のプレイヤーを巻き込むマス。
+  // 旧版の表だけだと、他人の行動が自分のお金に響く場面が1つも無く、他人の手番は眺めるだけだった。
+  // 0.06 は 50マスのコースでそれぞれ2枚ずつ出る値（1枚だと1ゲームに1回踏まれるかどうか）
+  COLLECT_EVENT: 0.06,
+  RIVAL_EVENT: 0.06,
 };
 
 export type BoardKey = 'HIGH_SCHOOL' | 'PROFESSIONAL_SCHOOL' | 'UNIVERSITY' | 'MAIN' | 'BRANCH_ROUTE';

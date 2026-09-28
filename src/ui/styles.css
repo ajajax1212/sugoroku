@@ -1721,3 +1721,257 @@ input:focus {
     max-height: none;
   }
 }
+
+/* ------------------------------------------------------------ 溜め（賭けの結果を伏せる） */
+.notice-hidden .notice-title {
+  animation: suspense 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes suspense {
+  to {
+    transform: scale(1.04);
+  }
+}
+
+/* 開いた瞬間だけ弾ませる。class が付いた時点でアニメーションが始まるので、伏せていたお知らせにだけ効く */
+.notice-reveal .notice-title,
+.notice-reveal .notice-dice {
+  animation: reveal-pop 0.45s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+@keyframes reveal-pop {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+}
+
+.notice-drum {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 10px 0;
+  font-size: 18px;
+  color: var(--ink-2);
+}
+
+.notice-drum span {
+  animation: drum 0.9s ease-in-out infinite;
+}
+
+.notice-drum span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.notice-drum span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes drum {
+  50% {
+    transform: translateY(-6px);
+    opacity: 0.35;
+  }
+}
+
+/* ------------------------------------------------------------ 大きなお金の動き */
+.cutins {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  pointer-events: none;
+  padding: 16px;
+}
+
+.cutin {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: min(420px, calc(100vw - 32px));
+  padding: 16px 28px;
+  background: var(--panel);
+  border: 3px solid var(--ink);
+  border-left: 14px solid var(--pc);
+  border-radius: var(--r-panel);
+  box-shadow: var(--lift-2);
+  animation: cutin 2.8s ease-out both;
+}
+
+.cutin-name {
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.cutin-amount {
+  font-size: clamp(34px, 7vw, 56px);
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.cutin-up .cutin-amount {
+  color: var(--red-deep);
+}
+
+.cutin-down .cutin-amount {
+  color: #2d5fb8;
+}
+
+.cutin-rank {
+  font-weight: 800;
+  font-size: 16px;
+  padding: 2px 12px;
+  border-radius: 99px;
+  background: var(--pc);
+  color: #fff;
+}
+
+@keyframes cutin {
+  0% {
+    transform: translateX(-60vw) skewX(-12deg);
+    opacity: 0;
+  }
+  12% {
+    transform: translateX(0) skewX(0);
+    opacity: 1;
+  }
+  85% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(40vw);
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------ リアクション */
+.reactbar {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px 12px;
+  border-top: 2px dashed var(--line);
+}
+
+.reactbar-btn {
+  appearance: none;
+  border: 2px solid var(--ink);
+  border-radius: 99px;
+  background: #fff;
+  width: 40px;
+  height: 40px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--lift-1);
+  transition: transform 0.08s;
+}
+
+.reactbar-btn:hover {
+  transform: translateY(-2px);
+}
+
+.reactbar-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 0 0 var(--ink);
+}
+
+.rx-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.rx {
+  position: absolute;
+  bottom: 8%;
+  display: grid;
+  justify-items: center;
+  font-size: 40px;
+  line-height: 1;
+  animation: rx-rise 2.6s ease-out both;
+}
+
+.rx small {
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--pc);
+  border: 1.5px solid var(--ink);
+  border-radius: 99px;
+  padding: 1px 8px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+@keyframes rx-rise {
+  0% {
+    transform: translateY(20px) scale(0.5);
+    opacity: 0;
+  }
+  15% {
+    transform: translateY(0) scale(1.15);
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-45vh) scale(1);
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------ 順位の帯（狭い画面だけ） */
+.rankstrip {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .rankstrip {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 6px 12px;
+    list-style: none;
+    overflow-x: auto;
+    background: var(--panel-2);
+    border-bottom: 2px solid var(--ink);
+    scrollbar-width: none;
+  }
+  .rankstrip li {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    font-size: 13px;
+    background: #fff;
+    border: 2px solid var(--pc);
+    border-radius: 99px;
+  }
+  .rankstrip li.rankstrip-turn {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pc) 35%, transparent);
+  }
+  .rankstrip i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--pc);
+  }
+  .rankstrip-name {
+    max-width: 7em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+  }
+}

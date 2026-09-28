@@ -41,6 +41,8 @@ export const TILE: Record<CellType, { family: TileFamily; short: string }> = {
   MOVE_ABROAD_EVENT: { family: 'chance', short: '海外' },
   ILLNESS_EVENT: { family: 'danger', short: '病気' },
   INHERITANCE_EVENT: { family: 'gain', short: '遺産' },
+  COLLECT_EVENT: { family: 'gain', short: '集金' },
+  RIVAL_EVENT: { family: 'danger', short: '勝負' },
 };
 
 /** 凡例に出す系統と説明 */

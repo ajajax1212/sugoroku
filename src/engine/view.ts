@@ -15,6 +15,6 @@ export type GameView = GameState & { choiceView: ChoiceView | null };
 
 export function viewOf(s: GameState): GameView {
   const step = s.step;
-  const choiceView = step.k === 'choice' ? { ...choiceTitle(step.choice), options: choiceOptions(s, step.choice) } : null;
+  const choiceView = step.k === 'choice' ? { ...choiceTitle(s, step.choice), options: choiceOptions(s, step.choice) } : null;
   return { ...s, choiceView };
 }

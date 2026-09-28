@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { GameView } from '../engine/view';
-import { EV } from './events';
+import { EV, type Reaction } from './events';
 
 export type Lobby = {
   code: string;
@@ -12,6 +12,11 @@ export type Lobby = {
 };
 
 export type ServerState = { lobby: Lobby; game: GameView | null; serverNow: number };
+
+/** 画面に流れているリアクション1つ。key は自分の画面の中だけの通し番号 */
+export type FloatingReaction = { key: number; playerId: string; emoji: Reaction };
+/** リアクションが画面に残る時間。CSS のアニメーション（.rx）と揃える */
+export const REACTION_MS = 2_600;
 
 type Ack = { ok: boolean; error?: string; [k: string]: unknown };
 
@@ -41,6 +46,8 @@ export function useRoom() {
   /** サーバーの時計 − 自分の時計。締切やコマの移動はサーバーの時刻で届くので、これで補正する */
   const offsetRef = useRef(0);
   const codeRef = useRef<string | null>(null);
+  const [reactions, setReactions] = useState<FloatingReaction[]>([]);
+  const reactionKey = useRef(0);
 
   /**
    * ack が返らないとき（サーバーが落ちている・再接続中・イベント名の取り違え）でも
@@ -97,6 +104,11 @@ export function useRoom() {
       }
     });
     socket.on('disconnect', () => setConnected(false));
+    socket.on(EV.reaction, (r: { playerId: string; emoji: Reaction }) => {
+      const key = ++reactionKey.current;
+      setReactions((xs) => [...xs.slice(-20), { key, ...r }]);
+      setTimeout(() => setReactions((xs) => xs.filter((x) => x.key !== key)), REACTION_MS);
+    });
     socket.on(EV.state, (s: ServerState) => {
       offsetRef.current = s.serverNow - Date.now();
       setState(s);
@@ -158,6 +170,8 @@ export function useRoom() {
   const roll = useCallback(() => run(EV.roll, {}, '振れませんでした'), [run]);
   const choose = useCallback((optionId: string) => run(EV.choose, { optionId }, '選べませんでした'), [run]);
   const skipNotice = useCallback(() => run(EV.skipNotice, {}, ''), [run]);
+  /** 失敗（連打・手番が変わった直後）は黙って捨てる。エラー表示を出すほどのことではない */
+  const react = useCallback((emoji: Reaction) => void emit(EV.react, { code, emoji }), [emit, code]);
 
   /** 自分から抜ける。席の合鍵も捨てて、入口からやり直す */
   const leave = useCallback(async () => {
@@ -169,7 +183,7 @@ export function useRoom() {
   /** いまのサーバー時刻。残り時間とコマの移動はこれを基準に描く */
   const serverNow = useCallback(() => Date.now() + offsetRef.current, []);
 
-  return { state, me, code, error, connected, create, join, rejoin, configure, start, toLobby, roll, choose, skipNotice, leave, serverNow, setError };
+  return { state, me, code, error, connected, create, join, rejoin, configure, start, toLobby, roll, choose, skipNotice, react, reactions, leave, serverNow, setError };
 }
 
 export type Room = ReturnType<typeof useRoom>;

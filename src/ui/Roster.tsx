@@ -4,7 +4,7 @@ import { man } from './format';
 import { playerColor } from './theme';
 
 /** 所持金の順位。カードの並びは入った順のまま（手番の順と揃える）で、順位は札で見せる */
-function moneyRanks(players: Player[]): Map<string, number> {
+export function moneyRanks(players: Player[]): Map<string, number> {
   const sorted = [...players].sort((a, b) => b.money - a.money);
   return new Map(players.map((p) => [p.id, sorted.findIndex((x) => x.money === p.money) + 1]));
 }
@@ -39,7 +39,7 @@ export function Roster({ players, turnId, me }: { players: Player[]; turnId: str
             </div>
             <div className="pcard-meta">
               <span>💼 {p.job === 'NONE' ? '学生' : JOBS[p.job].name}</span>
-              {p.salary > 0 && <span className="muted">月給{man(p.salary)}</span>}
+              {p.salary > 0 && <span className="muted">給料{man(p.salary)}</span>}
             </div>
             <div className="pcard-meta">
               <span className="chip">{p.rank ? `🏁 ${p.rank}着` : `📍 ${BOARDS[p.board].short} ${p.position + 1}マス`}</span>

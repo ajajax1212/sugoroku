@@ -16,6 +16,8 @@ export type RoomPlayer = {
   name: string;
   socketId: string | null;
   connected: boolean;
+  /** 最後にリアクションを送った時刻（連打よけ） */
+  lastReactAt: number;
 };
 
 export type Room = {
@@ -73,7 +75,7 @@ export function getRoom(code: unknown): Room | undefined {
 }
 
 export function addPlayer(room: Room, name: string, socketId: string): RoomPlayer {
-  const player: RoomPlayer = { id: makeId(), token: makeToken(), name, socketId, connected: true };
+  const player: RoomPlayer = { id: makeId(), token: makeToken(), name, socketId, connected: true, lastReactAt: 0 };
   room.players.push(player);
   if (!room.hostId) room.hostId = player.id;
   return player;
